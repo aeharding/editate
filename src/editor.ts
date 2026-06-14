@@ -462,6 +462,9 @@ export const createEditor = <
       // Set when a pointer (tap) ends a composition: the caret was moved
       // deliberately, so honor it instead of the restored model selection.
       let pointerEndedComposition = false;
+      // True only while flushInput is finalizing a composition, so the apply
+      // hook below doesn't recurse when flushInput dispatches its own ops.
+      let flushing = false;
 
       const document = getCurrentDocument(element);
 
@@ -519,6 +522,7 @@ export const createEditor = <
       };
 
       const flushInput = () => {
+        flushing = true;
         const queue = observer._flush();
 
         observer._record(false);
@@ -566,7 +570,21 @@ export const createEditor = <
         }
 
         isComposing = false;
+        flushing = false;
       };
+
+      // A programmatic edit (paste, toolbar insert, image insert, …) dispatched
+      // while an IME composition is active must finalize that composition
+      // first. Otherwise it lands inside the composing region and is reverted
+      // when the composition ends — on Android, GBoard re-composes the word
+      // under the caret, so even a bare-caret paste hits this. The `flushing`
+      // guard breaks the recursion from flushInput's own apply().
+      const unhookApply = editor.hook("apply", (_op, next) => {
+        if (isComposing && !flushing) {
+          flushInput();
+        }
+        next();
+      });
 
       // spec compliant: keydown -> beforeinput -> input (-> keyup)
       // Safari (IME)  : beforeinput -> input -> keydown (-> keyup)
@@ -791,6 +809,7 @@ export const createEditor = <
         element.style.whiteSpace = prevWhiteSpace;
 
         observer._dispose();
+        unhookApply();
 
         document.removeEventListener("selectionchange", onSelectionChange);
         element.removeEventListener("keydown", onKeyDown);

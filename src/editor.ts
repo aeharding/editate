@@ -459,6 +459,9 @@ export const createEditor = <
       let isComposing = false;
       let hasFocus = false;
       let isDragging = false;
+      // Set when a pointer (tap) ends a composition: the caret was moved
+      // deliberately, so honor it instead of the restored model selection.
+      let pointerEndedComposition = false;
 
       const document = getCurrentDocument(element);
 
@@ -520,6 +523,14 @@ export const createEditor = <
 
         observer._record(false);
 
+        // A pointer (tap) that ended this composition is a deliberate caret
+        // move. Capture it now — before the revert removes the composed DOM —
+        // so it can be honored over the restored model selection below.
+        const pointerSelection = pointerEndedComposition
+          ? domSelectionToSelection(doc, takeSelectionSnapshot(element, parser))
+          : null;
+        pointerEndedComposition = false;
+
         if (queue.length) {
           observer._revert(queue);
 
@@ -543,6 +554,17 @@ export const createEditor = <
           apply(inputTransaction[0]);
           inputTransaction = null;
         }
+
+        // Honor a composition-ending tap over the post-composition model
+        // selection (which would otherwise pull the caret back inside the
+        // just-typed text). Assigned directly rather than via updateSelection:
+        // publishing a selectionchange here would trigger a syncSelection
+        // against the just-reverted (stale) DOM and clobber it; the next render
+        // flushes this selection to the DOM cleanly.
+        if (pointerSelection && isValidSelection(doc, pointerSelection)) {
+          selection = pointerSelection;
+        }
+
         isComposing = false;
       };
 
@@ -645,6 +667,13 @@ export const createEditor = <
         hasFocus = false;
       };
 
+      const onPointerDown = () => {
+        // A tap during composition is a deliberate caret move (see flushInput).
+        if (isComposing) {
+          pointerEndedComposition = true;
+        }
+      };
+
       const onSelectionChange = () => {
         // Safari may dispatch selectionchange event after dragstart
         if (hasFocus && !isComposing && !isDragging) {
@@ -730,6 +759,7 @@ export const createEditor = <
       element.addEventListener("beforeinput", onBeforeInput);
       element.addEventListener("compositionstart", onCompositionStart);
       element.addEventListener("compositionend", onCompositionEnd);
+      element.addEventListener("pointerdown", onPointerDown);
       element.addEventListener("focus", onFocus);
       element.addEventListener("blur", onBlur);
       element.addEventListener("copy", onCopy);
@@ -768,6 +798,7 @@ export const createEditor = <
         element.removeEventListener("beforeinput", onBeforeInput);
         element.removeEventListener("compositionstart", onCompositionStart);
         element.removeEventListener("compositionend", onCompositionEnd);
+        element.removeEventListener("pointerdown", onPointerDown);
         element.removeEventListener("focus", onFocus);
         element.removeEventListener("blur", onBlur);
         element.removeEventListener("copy", onCopy);
